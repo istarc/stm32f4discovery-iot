@@ -56,7 +56,22 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */     
+#define USE_PRINTF
+#define USE_NETIF
 
+#ifdef USE_PRINTF
+/* Used to override _write */
+#include <errno.h>
+#include <sys/unistd.h>
+#endif
+
+#ifdef USE_NETIF
+#include "socket.h"
+#include <string.h>
+#endif
+
+#include "gpio.h"
+#include "usart.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -86,7 +101,9 @@ osMessageQId buttonEventQueueHandle;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-   
+#ifdef USE_PRINTF
+extern int _write(int file, char *data, int len);
+#endif
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void const * argument);
@@ -180,13 +197,20 @@ void StartDefaultTask(void const * argument)
 /* USER CODE END Header_StartBlinkyTask */
 void StartBlinkyTask(void const * argument)
 {
-  /* USER CODE BEGIN StartBlinkyTask */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END StartBlinkyTask */
+	/* USER CODE BEGIN StartBlinkyTask */
+	/* Infinite loop */
+	for (;;) {
+		HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
+
+		/*
+		 Delay for a period of time. vTaskDelay() places the task into
+		 the Blocked state until the period has expired.
+		 The delay period is spacified in 'ticks'. We can convert
+		 yhis in milisecond with the constant portTICK_RATE_MS.
+		 */
+		vTaskDelay(1500 / portTICK_RATE_MS);
+	}
+	/* USER CODE END StartBlinkyTask */
 }
 
 /* USER CODE BEGIN Header_StartButtonTask */
@@ -198,13 +222,43 @@ void StartBlinkyTask(void const * argument)
 /* USER CODE END Header_StartButtonTask */
 void StartButtonTask(void const * argument)
 {
-  /* USER CODE BEGIN StartButtonTask */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END StartButtonTask */
+	/* USER CODE BEGIN StartButtonTask */
+	uint8_t sig = 1u;
+	char msg[] = ".";
+#ifdef USE_NETIF
+	struct sockaddr_in dstaddr;
+	memset(&dstaddr, 0, sizeof(dstaddr));
+	dstaddr.sin_family = AF_INET;
+	dstaddr.sin_port = PP_HTONS(8080);
+	dstaddr.sin_addr.s_addr = inet_addr("192.168.0.1");
+	int sh = socket(AF_INET, SOCK_DGRAM, 0); /* TODO Implement Error Handling */
+	connect(sh, (struct sockaddr* )&dstaddr, sizeof(dstaddr)); /* TODO Implement Error Handling */
+#endif
+
+	/* Infinite loop */
+	for (;;) {
+		/* Detect Button Press  */
+		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) > 0) {
+			while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) > 0)
+				vTaskDelay(100 / portTICK_RATE_MS); /* Button Debounce Delay */
+			while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_0) == 0)
+				vTaskDelay(100 / portTICK_RATE_MS); /* Button Debounce Delay */
+
+			xQueueSendToBack(buttonEventQueueHandle, &sig, 0); /* Send Message */
+
+#ifdef USE_PRINTF
+			printf("%s", msg);
+			fflush(stdout);
+#else
+			HAL_UART_Transmit(&huart6, msg, sizeof(msg), 0); /* TODO Implement Error Handling */
+#endif
+
+#ifdef USE_NETIF
+			send(sh, msg, sizeof(msg), 0); /* TODO Implement Error Handling */
+#endif
+		}
+	}
+	/* USER CODE END StartButtonTask */
 }
 
 /* USER CODE BEGIN Header_StartToggleTask */
@@ -216,18 +270,47 @@ void StartButtonTask(void const * argument)
 /* USER CODE END Header_StartToggleTask */
 void StartToggleTask(void const * argument)
 {
-  /* USER CODE BEGIN StartToggleTask */
-  /* Infinite loop */
-  for(;;)
-  {
-    osDelay(1);
-  }
-  /* USER CODE END StartToggleTask */
+	/* USER CODE BEGIN StartToggleTask */
+	uint8_t sig;
+	portBASE_TYPE status;
+	/* Infinite loop */
+	for (;;) {
+		status = xQueueReceive(buttonEventQueueHandle, &sig, portMAX_DELAY); /* Receive Message */
+		/* portMAX_DELAY blocks task indefinitely if queue is empty */
+		if (status == pdTRUE) {
+			HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_14);
+		}
+	}
+	/* USER CODE END StartToggleTask */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
-     
+#ifdef USE_PRINTF
+/**
+ * @brief Function overriding _write routine to redirect stdout to USART6
+ * @param file: File descriptor
+ * @param data: Pointer to data buffer
+ * @param len:  Amount of data to be sent
+ * @retval 0:   OK, -1: Error
+ * @note Reentrancy:  No (because it calls non-reentrant function that uses a global variable and HW registers)
+ * @note Thread-safe: No (the called function does not ensure the global data in a consistent state during execution nor synchronizes access to the HW registers)
+ * @note Sync/Async:  Synchronous (the called transmit function busy waits and returns after data is physically sent over the wire, caveat: wastes CPU time)
+ */
+extern int _write(int file, char *data, int len)
+{
+   if ((file != STDOUT_FILENO) && (file != STDERR_FILENO))
+   {
+      errno = EBADF;
+      return -1;
+   }
+
+   HAL_StatusTypeDef status = HAL_UART_Transmit(&huart6, (uint8_t*)data, len, 0); /* TODO Implement Busy, Timeout, Error Handling */
+
+   // return # of bytes written - as best we can tell
+   return (status == HAL_OK ? len : 0);
+}
+#endif
 /* USER CODE END Application */
 
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
