@@ -1,8 +1,12 @@
-# Object files
+# Object files and build aritfacts
+build/
 *.o
 *.ko
 *.obj
 *.elf
+*.bin
+*.d
+*.lst
 
 # Precompiled Headers
 *.gch
@@ -30,3 +34,9 @@
 
 # Debug files
 *.dSYM/
+
+# Project files
+.settings/
+.cproject
+.project
+.mxproject
